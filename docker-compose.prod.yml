@@ -21,6 +21,7 @@ services:
     env_file: .env.production
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-rent}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-rent}?schema=public
+      DIRECT_URL: postgresql://${POSTGRES_USER:-rent}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-rent}?schema=public
       STORAGE_LOCAL_DIR: /app/storage
       WORKER_ENABLED: "false"
     volumes: [files:/app/storage]
@@ -37,6 +38,7 @@ services:
     env_file: .env.production
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-rent}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-rent}?schema=public
+      DIRECT_URL: postgresql://${POSTGRES_USER:-rent}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-rent}?schema=public
       STORAGE_LOCAL_DIR: /app/storage
       WORKER_ENABLED: "true"
     command: ["npx", "tsx", "src/worker/index.ts"]

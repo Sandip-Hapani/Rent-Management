@@ -4,6 +4,7 @@ import { finalizePeriod, generatePeriod, publishRule, saveDraftRule } from "@/se
 import { parseIsoDate } from "@/server/finance/period";
 
 const TABLES = [
+  "StoredBlob",
   "Allocation", "PaymentEvidence", "Payment", "Charge", "Adjustment", "Payout", "ChargeRuleShare", "ChargeRule", "ReminderRun", "FinancialPeriod",
   "DocumentAcknowledgement", "DocumentAccess", "DocumentVersion", "Document", "FileObject", "Announcement", "PriceChange", "Notification",
   "NotificationPreference", "EmailDelivery", "ReminderSchedule", "AuditEvent", "ImportRow", "ImportBatch", "ResidentAlias", "Membership",

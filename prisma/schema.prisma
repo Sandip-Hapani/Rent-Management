@@ -7,8 +7,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL") // runtime (pooled connection on Neon)
+  directUrl = env("DIRECT_URL") // migrations (direct connection); same as DATABASE_URL locally
 }
 
 // ───────────────────────────── Identity & access ─────────────────────────────
@@ -809,4 +810,14 @@ model ImportRow {
   payment Payment?
 
   @@unique([batchId, rowNumber])
+}
+
+// ───────────────────────────── File contents (STORAGE_DRIVER=db) ─────────────────────────────
+
+/// File bytes for hosts without persistent disk (Vercel, Netlify, Render free). Keyed like FileObject.storageKey.
+model StoredBlob {
+  key         String   @id
+  contentType String
+  data        Bytes
+  createdAt   DateTime @default(now())
 }

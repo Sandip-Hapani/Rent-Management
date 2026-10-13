@@ -52,7 +52,25 @@ export async function queueEmail(db: Db, input: QueueEmailInput): Promise<{ id: 
       skipReason,
     },
   });
+  if (!skipReason) flushSoon();
   return { id: row.id, deduplicated: false, skipped: !!skipReason };
+}
+
+/**
+ * Send queued emails right after the current request finishes (Next.js `after`), so invitations
+ * and password resets arrive immediately even on hosts without a background worker. Outside a
+ * request (worker, CLI, tests) this is a no-op and the scheduled job sends them instead.
+ */
+function flushSoon(): void {
+  import("next/server")
+    .then(({ after }) => {
+      try {
+        after(() => processOutbox({ limit: 20 }).then(() => undefined, () => undefined));
+      } catch {
+        /* not inside a request scope */
+      }
+    })
+    .catch(() => undefined);
 }
 
 let transporter: Transporter | null = null;

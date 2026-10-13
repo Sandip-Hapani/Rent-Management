@@ -3,9 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "prisma generate && next build",
+    "build:deploy": "prisma generate && prisma migrate deploy && tsx scripts/bootstrap.ts && next build",
+    "vercel-build": "npm run build:deploy",
     "start": "next start",
     "worker": "tsx src/worker/index.ts",
     "typecheck": "tsc --noEmit",
@@ -17,7 +22,8 @@
     "test": "vitest run",
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "postinstall": "prisma generate"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

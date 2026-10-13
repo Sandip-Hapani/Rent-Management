@@ -1,0 +1,30 @@
+# Runs the app's scheduled jobs (rent reminders + email retries) by calling POST /api/cron/tick.
+# Needed on hosts without free cron (Render, Netlify). On Vercel the built-in cron in vercel.json
+# already does this daily; enabling this too is harmless (the job is idempotent).
+#
+# Setup: GitHub repo → Settings → Secrets and variables → Actions → add APP_URL and CRON_SECRET.
+# Without those secrets the job does nothing and succeeds.
+name: Scheduled jobs
+
+on:
+  schedule:
+    - cron: "15 * * * *" # hourly (GitHub may delay runs by a few minutes)
+  workflow_dispatch: {}
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Call /api/cron/tick
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$APP_URL" ] || [ -z "$CRON_SECRET" ]; then
+            echo "APP_URL / CRON_SECRET repository secrets are not set; skipping."
+            exit 0
+          fi
+          # --retry covers free hosts that need a few seconds to wake up.
+          curl -fsS --retry 3 --retry-delay 20 --max-time 90 -X POST \
+            -H "Authorization: Bearer $CRON_SECRET" "${APP_URL%/}/api/cron/tick"

@@ -30,7 +30,7 @@ Services:
 
 **Updating:** `git pull && docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build`. Migrations run automatically, and they only ever move forward.
 
-**Alternative hosting** (no long-running worker): deploy the app on Vercel or Render, use Neon or Supabase for Postgres and an S3-compatible bucket (`STORAGE_DRIVER=s3`). Then call `POST https://…/api/cron/tick` with `Authorization: Bearer $CRON_SECRET` every 5–15 minutes from any scheduler (cron-job.org, GitHub Actions, a hosting cron). The job is idempotent.
+**Alternative hosting** (no long-running worker). The step-by-step version is in [06-deployment-guide.md](06-deployment-guide.md): deploy the app on Vercel or Render, use Neon or Supabase for Postgres and an S3-compatible bucket (`STORAGE_DRIVER=s3`). Then call `POST https://…/api/cron/tick` with `Authorization: Bearer $CRON_SECRET` every 5–15 minutes from any scheduler (cron-job.org, GitHub Actions, a hosting cron). The job is idempotent.
 
 ## 2. Backups and restore
 

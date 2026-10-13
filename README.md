@@ -9,7 +9,7 @@ A private web app for a shared apartment. It tracks rent, electricity, deposits 
 | | |
 |---|---|
 | Stack | Next.js 16 (App Router, TypeScript) · Tailwind CSS 4 · PostgreSQL 16 · Prisma 6 · Recharts · Nodemailer · node-cron |
-| Docs | [Data analysis & open questions](docs/01-data-analysis.md) · [Architecture](docs/02-architecture.md) · [Financial spec](docs/03-financial-spec.md) · [Operations](docs/04-operations.md) · [Administrator guide](docs/05-admin-guide.md) |
+| Docs | [Data analysis & open questions](docs/01-data-analysis.md) · [Architecture](docs/02-architecture.md) · [Financial spec](docs/03-financial-spec.md) · [Operations](docs/04-operations.md) · [Administrator guide](docs/05-admin-guide.md) · **[Deployment guide (free tier)](docs/06-deployment-guide.md)** |
 
 ## Quick start (development)
 
@@ -83,7 +83,8 @@ docs/              design, operations, admin guide
 
 ## Deployment
 
-See [docs/04-operations.md](docs/04-operations.md). The recommended setup is Docker Compose on a small EU VPS, with Caddy for HTTPS and nightly backups.
+- **Free hosting (Vercel + Neon + Gmail/Brevo SMTP):** follow [docs/06-deployment-guide.md](docs/06-deployment-guide.md). It covers every secret to set, how the default administrator is created on first deploy, and how to invite residents. It also has notes for Render, Netlify and moving hosts.
+- **Own server:** Docker Compose with Caddy HTTPS and nightly backups, in [docs/04-operations.md](docs/04-operations.md).
 
 ## License
 
