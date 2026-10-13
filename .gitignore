@@ -147,3 +147,16 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+# ---- Project-specific ----
+node_modules
+.env.local
+storage/
+coverage/
+playwright-report/
+test-results/
+next-env.d.ts
+data/*.xlsx
+storage-test/
+# Real tenant data must never be committed (tests build workbooks in memory)
+*.xlsx

@@ -1,0 +1,12 @@
+node_modules
+.next
+.git
+.env
+.env.*
+storage
+storage-test
+data
+coverage
+test-results
+playwright-report
+.claude

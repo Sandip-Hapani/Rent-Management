@@ -1,0 +1,19 @@
+# Local development services. Production: see docker-compose.prod.yml and docs/05-operations.md
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: rent
+      POSTGRES_PASSWORD: rent
+      POSTGRES_DB: rent
+    ports: ["5433:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data, ./scripts/init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql:ro]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rent"]
+      interval: 5s
+      retries: 10
+  mailpit:
+    image: axllent/mailpit:v1.21
+    ports: ["1025:1025", "8025:8025"]
+volumes:
+  pgdata:

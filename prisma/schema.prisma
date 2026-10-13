@@ -1,0 +1,812 @@
+// Shared-apartment rent management — data model.
+// Money is always stored as integer euro cents (Int). Periods are 'YYYY-MM' strings.
+// See docs/03-financial-spec.md for the rules these tables implement.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────────────────────── Identity & access ─────────────────────────────
+
+enum UserStatus {
+  INVITED
+  ACTIVE
+  DEACTIVATED
+}
+
+model User {
+  id              String     @id @default(cuid())
+  email           String     @unique // stored lower-cased
+  name            String
+  passwordHash    String?
+  emailVerifiedAt DateTime?
+  status          UserStatus @default(INVITED)
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  lastLoginAt     DateTime?
+
+  sessions      Session[]
+  memberships   Membership[]
+  notifications Notification[]
+  preferences   NotificationPreference[]
+}
+
+model Session {
+  id         String   @id @default(cuid())
+  tokenHash  String   @unique
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+  userAgent  String?
+
+  @@index([userId])
+}
+
+enum AuthTokenType {
+  INVITE
+  PASSWORD_RESET
+  EMAIL_VERIFY
+}
+
+model AuthToken {
+  id           String        @id @default(cuid())
+  type         AuthTokenType
+  tokenHash    String        @unique
+  email        String
+  userId       String?
+  membershipId String?
+  expiresAt    DateTime
+  usedAt       DateTime?
+  createdById  String?
+  createdAt    DateTime      @default(now())
+
+  @@index([email, type])
+}
+
+model RateLimitBucket {
+  key         String
+  windowStart DateTime
+  count       Int      @default(0)
+
+  @@id([key, windowStart])
+}
+
+// ───────────────────────────── Apartment & membership ─────────────────────────────
+
+model Apartment {
+  id                   String   @id @default(cuid())
+  name                 String
+  address              String?
+  timezone             String   @default("Europe/Berlin")
+  rentDueDay           Int      @default(1) // day of month obligations fall due
+  graceDays            Int      @default(3) // days after due date before "overdue"
+  maxUploadBytes       Int      @default(10485760)
+  historicalImportDone Boolean  @default(false)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  memberships      Membership[]
+  periods          FinancialPeriod[]
+  rules            ChargeRule[]
+  charges          Charge[]
+  adjustments      Adjustment[]
+  payments         Payment[]
+  payouts          Payout[]
+  files            FileObject[]
+  documents        Document[]
+  announcements    Announcement[]
+  priceChanges     PriceChange[]
+  reminderSchedule ReminderSchedule?
+  auditEvents      AuditEvent[]
+  importBatches    ImportBatch[]
+  aliases          ResidentAlias[]
+}
+
+enum Role {
+  ADMIN
+  RESIDENT
+}
+
+enum MembershipStatus {
+  ACTIVE
+  LEFT
+}
+
+enum ReconciliationStatus {
+  UNRECONCILED
+  RECONCILED
+}
+
+model Membership {
+  id                   String               @id @default(cuid())
+  apartmentId          String
+  apartment            Apartment            @relation(fields: [apartmentId], references: [id])
+  userId               String
+  user                 User                 @relation(fields: [userId], references: [id])
+  role                 Role                 @default(RESIDENT)
+  displayName          String
+  status               MembershipStatus     @default(ACTIVE)
+  moveInDate           DateTime             @db.Date
+  moveOutDate          DateTime?            @db.Date
+  billingStart         String // 'YYYY-MM' inclusive
+  billingEnd           String? // 'YYYY-MM' inclusive, null = ongoing
+  reconciliationStatus ReconciliationStatus @default(UNRECONCILED)
+  reconciledAt         DateTime?
+  notes                String?
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+
+  charges          Charge[]
+  adjustments      Adjustment[]
+  payments         Payment[]
+  payouts          Payout[]
+  ruleShares       ChargeRuleShare[]
+  aliases          ResidentAlias[]
+  acknowledgements DocumentAcknowledgement[]
+  documentAccess   DocumentAccess[]
+  reminderRuns     ReminderRun[]
+
+  @@index([apartmentId, status])
+  @@index([userId])
+}
+
+/// Alternative spellings used in imported data (e.g. "Jhon", "John (By Mia)").
+model ResidentAlias {
+  id           String     @id @default(cuid())
+  apartmentId  String
+  apartment    Apartment  @relation(fields: [apartmentId], references: [id])
+  membershipId String
+  membership   Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  alias        String // normalised: lower-case, trimmed, collapsed whitespace
+
+  @@unique([apartmentId, alias])
+}
+
+// ───────────────────────────── Charges (obligations) ─────────────────────────────
+
+enum ChargeCategory {
+  RENT
+  ELECTRICITY
+  OPERATING_COSTS
+  SHARED_EXPENSE
+  SECURITY_DEPOSIT
+  RENT_BUFFER
+  OTHER
+}
+
+enum PeriodStatus {
+  OPEN
+  GENERATED
+  FINALIZED
+}
+
+model FinancialPeriod {
+  id            String       @id @default(cuid())
+  apartmentId   String
+  apartment     Apartment    @relation(fields: [apartmentId], references: [id])
+  period        String // 'YYYY-MM'
+  status        PeriodStatus @default(OPEN)
+  dueDate       DateTime     @db.Date
+  generatedAt   DateTime?
+  finalizedAt   DateTime?
+  finalizedById String?
+  createdAt     DateTime     @default(now())
+
+  charges      Charge[]
+  adjustments  Adjustment[]
+  reminderRuns ReminderRun[]
+
+  @@unique([apartmentId, period])
+}
+
+enum AllocationMethod {
+  EQUAL_SPLIT
+  FIXED_PER_MEMBER
+  CUSTOM
+  PERCENTAGE
+}
+
+enum RuleStatus {
+  DRAFT
+  PUBLISHED
+  SUPERSEDED
+  ARCHIVED
+}
+
+/// A versioned price configuration for one category. New prices = new rule, never an edit.
+model ChargeRule {
+  id                   String           @id @default(cuid())
+  apartmentId          String
+  apartment            Apartment        @relation(fields: [apartmentId], references: [id])
+  category             ChargeCategory
+  name                 String
+  method               AllocationMethod
+  totalAmountCents     Int? // EQUAL_SPLIT / PERCENTAGE: apartment-wide monthly total
+  perMemberAmountCents Int? // FIXED_PER_MEMBER
+  effectiveFrom        String // 'YYYY-MM' inclusive
+  effectiveTo          String? // 'YYYY-MM' inclusive, set when superseded
+  reason               String?
+  status               RuleStatus       @default(DRAFT)
+  version              Int              @default(1)
+  previousRuleId       String?
+  createdById          String
+  createdAt            DateTime         @default(now())
+  publishedAt          DateTime?
+
+  shares  ChargeRuleShare[]
+  charges Charge[]
+
+  @@index([apartmentId, category, status])
+}
+
+/// Participation / custom amount / percentage per membership for a rule.
+/// For EQUAL_SPLIT: if any share rows exist, only those memberships participate.
+model ChargeRuleShare {
+  id           String     @id @default(cuid())
+  ruleId       String
+  rule         ChargeRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  membershipId String
+  membership   Membership @relation(fields: [membershipId], references: [id])
+  amountCents  Int? // CUSTOM
+  basisPoints  Int? // PERCENTAGE (sum 10000)
+
+  @@unique([ruleId, membershipId])
+}
+
+enum ChargeStatus {
+  DRAFT
+  FINAL
+  VOID
+}
+
+model Charge {
+  id           String          @id @default(cuid())
+  apartmentId  String
+  apartment    Apartment       @relation(fields: [apartmentId], references: [id])
+  membershipId String
+  membership   Membership      @relation(fields: [membershipId], references: [id])
+  periodId     String
+  period       FinancialPeriod @relation(fields: [periodId], references: [id])
+  category     ChargeCategory
+  amountCents  Int
+  status       ChargeStatus    @default(DRAFT)
+  description  String?
+  ruleId       String?
+  rule         ChargeRule?     @relation(fields: [ruleId], references: [id])
+  ruleVersion  Int?
+  dueDate      DateTime        @db.Date
+  createdById  String?
+  createdAt    DateTime        @default(now())
+  finalizedAt  DateTime?
+  voidedAt     DateTime?
+  voidedById   String?
+  voidReason   String?
+
+  allocations Allocation[]
+
+  @@unique([membershipId, periodId, category, ruleId])
+  @@index([apartmentId, periodId])
+  @@index([membershipId, status])
+}
+
+enum AdjustmentKind {
+  OPENING_BALANCE
+  CREDIT
+  DEBIT
+  SETTLEMENT
+  WRITE_OFF
+  DEPOSIT_APPLIED
+  CORRECTION
+  REVERSAL
+}
+
+/// Signed change to what a member owes for (period, category). Immutable.
+model Adjustment {
+  id           String          @id @default(cuid())
+  apartmentId  String
+  apartment    Apartment       @relation(fields: [apartmentId], references: [id])
+  membershipId String
+  membership   Membership      @relation(fields: [membershipId], references: [id])
+  periodId     String
+  period       FinancialPeriod @relation(fields: [periodId], references: [id])
+  category     ChargeCategory
+  kind         AdjustmentKind
+  amountCents  Int // + increases amount owed, − decreases it
+  reason       String
+  reversesId   String?         @unique
+  reverses     Adjustment?     @relation("AdjustmentReversal", fields: [reversesId], references: [id])
+  reversedBy   Adjustment?     @relation("AdjustmentReversal")
+  createdById  String
+  createdAt    DateTime        @default(now())
+
+  @@index([membershipId, periodId])
+}
+
+// ───────────────────────────── Payments ─────────────────────────────
+
+enum PaymentStatus {
+  DRAFT
+  SUBMITTED
+  UNDER_REVIEW
+  CLARIFICATION_REQUESTED
+  VERIFIED
+  REJECTED
+  REVERSED
+}
+
+enum PaymentSource {
+  APP
+  IMPORT
+  ADMIN_ENTRY
+  SELF_SETTLED
+}
+
+model Payment {
+  id                   String        @id @default(cuid())
+  apartmentId          String
+  apartment            Apartment     @relation(fields: [apartmentId], references: [id])
+  membershipId         String
+  membership           Membership    @relation(fields: [membershipId], references: [id])
+  amountCents          Int
+  transferDate         DateTime      @db.Date
+  bank                 String?
+  description          String?
+  intendedPeriods      String[] // 'YYYY-MM' the resident says this covers
+  includesDeposit      Boolean       @default(false)
+  includesElectricity  Boolean       @default(false)
+  status               PaymentStatus @default(DRAFT)
+  source               PaymentSource @default(APP)
+  residentNote         String?
+  adminNote            String?
+  clarificationMessage String?
+  rejectionReason      String?
+  submittedAt          DateTime?
+  reviewedAt           DateTime?
+  reviewedById         String?
+  reversedAt           DateTime?
+  reversedById         String?
+  reversalReason       String?
+  importRowId          String?       @unique
+  createdById          String
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+
+  allocations Allocation[]
+  evidence    PaymentEvidence[]
+  importRow   ImportRow?        @relation(fields: [importRowId], references: [id])
+
+  @@index([apartmentId, status])
+  @@index([membershipId, status])
+}
+
+enum AllocationState {
+  PROPOSED
+  ACTIVE
+  REVERSED
+}
+
+/// Links part of one payment to one charge. Separate from Payment by design (n:m).
+model Allocation {
+  id             String          @id @default(cuid())
+  paymentId      String
+  payment        Payment         @relation(fields: [paymentId], references: [id])
+  chargeId       String
+  charge         Charge          @relation(fields: [chargeId], references: [id])
+  amountCents    Int
+  state          AllocationState @default(PROPOSED)
+  createdById    String
+  createdAt      DateTime        @default(now())
+  activatedAt    DateTime?
+  reversedAt     DateTime?
+  reversedById   String?
+  reversalReason String?
+
+  @@index([paymentId, state])
+  @@index([chargeId, state])
+}
+
+enum PayoutKind {
+  DEPOSIT_REFUND
+  CREDIT_REFUND
+  DEPOSIT_APPLIED
+}
+
+/// Money flowing from the apartment back to a member (or deposit re-purposed).
+model Payout {
+  id             String          @id @default(cuid())
+  apartmentId    String
+  apartment      Apartment       @relation(fields: [apartmentId], references: [id])
+  membershipId   String
+  membership     Membership      @relation(fields: [membershipId], references: [id])
+  kind           PayoutKind
+  category       ChargeCategory? // SECURITY_DEPOSIT / RENT_BUFFER for deposit payouts
+  amountCents    Int
+  date           DateTime        @db.Date
+  description    String
+  reversedAt     DateTime?
+  reversedById   String?
+  reversalReason String?
+  createdById    String
+  createdAt      DateTime        @default(now())
+
+  @@index([membershipId])
+}
+
+// ───────────────────────────── Files ─────────────────────────────
+
+enum FilePurpose {
+  PAYMENT_EVIDENCE
+  DOCUMENT
+  IMPORT
+}
+
+enum ScanStatus {
+  PENDING
+  CLEAN
+  INFECTED
+  SKIPPED
+  ERROR
+}
+
+model FileObject {
+  id                String      @id @default(cuid())
+  apartmentId       String
+  apartment         Apartment   @relation(fields: [apartmentId], references: [id])
+  purpose           FilePurpose
+  storageKey        String      @unique // random, never derived from user input
+  originalName      String
+  mimeType          String
+  sizeBytes         Int
+  sha256            String
+  scanStatus        ScanStatus  @default(PENDING)
+  uploadedById      String
+  ownerMembershipId String? // for evidence: the payer
+  createdAt         DateTime    @default(now())
+  deletedAt         DateTime?
+
+  evidence         PaymentEvidence[]
+  documentVersions DocumentVersion[]
+}
+
+model PaymentEvidence {
+  id        String     @id @default(cuid())
+  paymentId String
+  payment   Payment    @relation(fields: [paymentId], references: [id])
+  fileId    String
+  file      FileObject @relation(fields: [fileId], references: [id])
+  createdAt DateTime   @default(now())
+
+  @@unique([paymentId, fileId])
+}
+
+// ───────────────────────────── Documents & announcements ─────────────────────────────
+
+enum DocumentCategory {
+  RENTAL_AGREEMENT
+  RENT_INCREASE
+  ELECTRICITY_PRICE_CHANGE
+  ELECTRICITY_BILL
+  OPERATING_COST_STATEMENT
+  LANDLORD_COMMUNICATION
+  PAYMENT_RECEIPT
+  OTHER
+}
+
+enum DocumentVisibility {
+  ALL_RESIDENTS
+  SELECTED
+  ADMINS_ONLY
+}
+
+enum DocumentStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+model Document {
+  id            String             @id @default(cuid())
+  apartmentId   String
+  apartment     Apartment          @relation(fields: [apartmentId], references: [id])
+  title         String
+  category      DocumentCategory
+  description   String?
+  visibility    DocumentVisibility @default(ALL_RESIDENTS)
+  requiresAck   Boolean            @default(false)
+  status        DocumentStatus     @default(DRAFT)
+  priceChangeId String?
+  createdById   String
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  currentVersionId String?           @unique
+  currentVersion   DocumentVersion?  @relation("CurrentVersion", fields: [currentVersionId], references: [id])
+  versions         DocumentVersion[] @relation("DocumentVersions")
+  access           DocumentAccess[]
+
+  @@index([apartmentId, status])
+}
+
+model DocumentVersion {
+  id            String     @id @default(cuid())
+  documentId    String
+  document      Document   @relation("DocumentVersions", fields: [documentId], references: [id])
+  versionNumber Int
+  fileId        String
+  file          FileObject @relation(fields: [fileId], references: [id])
+  effectiveDate DateTime?  @db.Date
+  changeSummary String?
+  uploadedById  String
+  createdAt     DateTime   @default(now())
+  publishedAt   DateTime?
+
+  currentOf        Document?                 @relation("CurrentVersion")
+  acknowledgements DocumentAcknowledgement[]
+
+  @@unique([documentId, versionNumber])
+}
+
+model DocumentAccess {
+  documentId   String
+  document     Document   @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  membershipId String
+  membership   Membership @relation(fields: [membershipId], references: [id])
+
+  @@id([documentId, membershipId])
+}
+
+/// "I have seen this document" — explicitly NOT a signature.
+model DocumentAcknowledgement {
+  id             String          @id @default(cuid())
+  versionId      String
+  version        DocumentVersion @relation(fields: [versionId], references: [id])
+  membershipId   String
+  membership     Membership      @relation(fields: [membershipId], references: [id])
+  acknowledgedAt DateTime        @default(now())
+
+  @@unique([versionId, membershipId])
+}
+
+enum AnnouncementKind {
+  GENERAL
+  PRICE_CHANGE
+  DOCUMENT
+}
+
+model Announcement {
+  id          String           @id @default(cuid())
+  apartmentId String
+  apartment   Apartment        @relation(fields: [apartmentId], references: [id])
+  kind        AnnouncementKind @default(GENERAL)
+  title       String
+  body        String
+  createdById String
+  publishedAt DateTime         @default(now())
+}
+
+/// Permanent, published history of price changes.
+model PriceChange {
+  id             String         @id @default(cuid())
+  apartmentId    String
+  apartment      Apartment      @relation(fields: [apartmentId], references: [id])
+  category       ChargeCategory
+  previousRuleId String?
+  newRuleId      String         @unique
+  effectiveFrom  String
+  reason         String
+  summary        Json // per-member previous/new amounts at publish time
+  announcementId String?
+  publishedById  String
+  publishedAt    DateTime       @default(now())
+}
+
+// ───────────────────────────── Notifications ─────────────────────────────
+
+enum NotificationType {
+  RENT_DUE_SOON
+  RENT_OVERDUE
+  PAYMENT_SUBMITTED
+  PAYMENT_VERIFIED
+  PAYMENT_REJECTED
+  CLARIFICATION_REQUESTED
+  RENT_PRICE_UPDATED
+  ELECTRICITY_PRICE_UPDATED
+  PRICE_UPDATED
+  DOCUMENT_PUBLISHED
+  ANNOUNCEMENT
+  ACCOUNT_SECURITY
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  title     String
+  body      String
+  link      String?
+  dedupeKey String?          @unique
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  @@index([userId, readAt])
+}
+
+model NotificationPreference {
+  userId String
+  user   User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type   NotificationType
+  email  Boolean          @default(true)
+
+  @@id([userId, type])
+}
+
+enum DeliveryStatus {
+  PENDING
+  SENT
+  FAILED
+  SKIPPED
+}
+
+/// Email outbox + delivery log. dedupeKey guarantees one email per logical event.
+model EmailDelivery {
+  id            String         @id @default(cuid())
+  apartmentId   String?
+  userId        String?
+  toEmail       String
+  kind          String
+  subject       String
+  html          String
+  text          String
+  dedupeKey     String         @unique
+  status        DeliveryStatus @default(PENDING)
+  attempts      Int            @default(0)
+  lastError     String?
+  skipReason    String?
+  nextAttemptAt DateTime       @default(now())
+  sentAt        DateTime?
+  createdAt     DateTime       @default(now())
+
+  @@index([status, nextAttemptAt])
+}
+
+model ReminderSchedule {
+  id               String    @id @default(cuid())
+  apartmentId      String    @unique
+  apartment        Apartment @relation(fields: [apartmentId], references: [id])
+  enabled          Boolean   @default(true)
+  daysBeforeDue    Int[]     @default([3])
+  onDueDate        Boolean   @default(true)
+  daysAfterDue     Int[]     @default([3, 7])
+  repeatEveryDays  Int? // after the last explicit follow-up, keep reminding every N days
+  maxReminders     Int       @default(6)
+  excludeFullyPaid Boolean   @default(true)
+  mentionPending   Boolean   @default(true)
+  stopWhenVerified Boolean   @default(true)
+  sendHourLocal    Int       @default(9)
+  updatedAt        DateTime  @updatedAt
+}
+
+enum ReminderOutcome {
+  SENT
+  SKIPPED
+  FAILED
+  QUEUED
+}
+
+model ReminderRun {
+  id             String          @id @default(cuid())
+  dedupeKey      String          @unique // reminder:{periodId}:{membershipId}:{offset}
+  periodId       String
+  period         FinancialPeriod @relation(fields: [periodId], references: [id])
+  membershipId   String
+  membership     Membership      @relation(fields: [membershipId], references: [id])
+  offsetDays     Int
+  outcome        ReminderOutcome
+  reason         String?
+  amountDueCents Int?
+  deliveryId     String?
+  createdAt      DateTime        @default(now())
+
+  @@index([periodId])
+}
+
+// ───────────────────────────── Audit ─────────────────────────────
+
+model AuditEvent {
+  id           String     @id @default(cuid())
+  apartmentId  String?
+  apartment    Apartment? @relation(fields: [apartmentId], references: [id])
+  actorUserId  String?
+  action       String // e.g. payment.verified, charge.voided
+  entityType   String
+  entityId     String
+  membershipId String? // subject member, for scoping activity
+  isPublic     Boolean    @default(false) // visible in every resident's activity feed
+  summary      String // human readable, no secrets
+  before       Json?
+  after        Json?
+  reason       String?
+  createdAt    DateTime   @default(now())
+
+  @@index([apartmentId, createdAt])
+  @@index([entityType, entityId])
+}
+
+// ───────────────────────────── Historical import ─────────────────────────────
+
+enum ImportBatchStatus {
+  STAGED
+  COMMITTED
+  CANCELLED
+}
+
+model ImportBatch {
+  id          String            @id @default(cuid())
+  apartmentId String
+  apartment   Apartment         @relation(fields: [apartmentId], references: [id])
+  fileName    String
+  fileSha256  String
+  fileId      String?
+  status      ImportBatchStatus @default(STAGED)
+  forced      Boolean           @default(false)
+  summary     Json?
+  createdById String
+  createdAt   DateTime          @default(now())
+  committedAt DateTime?
+
+  rows ImportRow[]
+
+  @@index([apartmentId, fileSha256])
+}
+
+enum ImportDecision {
+  PENDING
+  IMPORT
+  SKIP
+}
+
+enum ImportRowStatus {
+  READY
+  NEEDS_REVIEW
+  IMPORTED
+  SKIPPED
+}
+
+model ImportRow {
+  id                  String          @id @default(cuid())
+  batchId             String
+  batch               ImportBatch     @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  rowNumber           Int
+  raw                 Json
+  submittedAt         DateTime?
+  monthName           String?
+  period              String? // resolved 'YYYY-MM'
+  transferDate        DateTime?       @db.Date
+  bank                String?
+  amountCents         Int?
+  amountFormula       String?
+  amountParts         Int[] // cents, from formula terms
+  description         String?
+  nameRaw             String?
+  note                String?
+  includesDeposit     Boolean         @default(false)
+  includesElectricity Boolean         @default(false)
+  membershipId        String?
+  issues              String[]
+  duplicateOfRow      Int?
+  decision            ImportDecision  @default(PENDING)
+  skipReason          String?
+  status              ImportRowStatus @default(NEEDS_REVIEW)
+
+  payment Payment?
+
+  @@unique([batchId, rowNumber])
+}
