@@ -31,7 +31,13 @@ export async function ensureInitialAdmin(db: PrismaClient, input: BootstrapInput
   const name = input.name?.trim() || email.split("@")[0]!;
   const password = input.password ?? "";
   const problems = passwordProblems(password, [name, email.split("@")[0]!]);
-  if (problems.length) throw new Error(`INITIAL_ADMIN_PASSWORD is not acceptable: ${problems.join(" ")}`);
+  if (problems.length) {
+    throw new Error(
+      `INITIAL_ADMIN_PASSWORD is not acceptable: ${problems.join(" ")} ` +
+        `(it must be at least 10 characters and must not contain INITIAL_ADMIN_NAME or the part of INITIAL_ADMIN_EMAIL before "@"). ` +
+        `Nothing was created; update the variable and redeploy.`,
+    );
+  }
   const moveIn = (input.moveInDate && parseIsoDate(input.moveInDate)) || todayInZone();
 
   return db.$transaction(async (tx) => {
